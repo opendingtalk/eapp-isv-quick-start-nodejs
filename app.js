@@ -22,6 +22,7 @@ app.use(cookieParser());
 
 HttpUtils = new httpReq(config.oapiHost);
 
+// 获取用户信息
 app.use('/login', function(req, res) {
     var code = req.body.authCode;
     var corpId = req.body.corpId;
@@ -58,36 +59,45 @@ app.use('/login', function(req, res) {
 
 });
 
+// 验证回调
 app.use('/receive', function(req, res) {
     var body = req.body;
     if (!body || !body.encrypt) {
         return;
     }
     var encrypt = body.encrypt;
-    console.log(encrypt);
 
     //解密推送信息
     var data = Cipher.decrypt(encrypt);
-    console.log(data);
     //解析数据结构
     var json = JSON.parse(data.message) || {};
     var msg = '';
     //处理不同类型的推送数据
     switch (json.EventType) {
+        // 验证新创建的回调URL有效性
         case 'check_create_suite_url':
             msg = 'success';
             break;
+        // 验证更新回调URL有效性
         case 'check_update_suite_url':
             msg = 'success';
             break;
+        // 应用suite_ticket数据推送
+        //suite_ticket用于用签名形式生成accessToken(访问钉钉服务端的凭证)，需要保存到应用的db。
+        //钉钉会定期向本callback url推送suite_ticket新值用以提升安全性。
+        //应用在获取到新的时值时，保存db成功后，返回给钉钉success加密串（如本demo的return）
         case 'suite_ticket':
             msg = 'success';
             break;
+        // 企业授权开通应用事件
+        //本事件应用应该异步进行授权开通企业的初始化，目的是尽最大努力快速返回给钉钉服务端。用以提升企业管理员开通应用体验
+        //即使本接口没有收到数据或者收到事件后处理初始化失败都可以后续再用户试用应用时从前端获取到corpId并拉取授权企业信息，
+        // 进而初始化开通及企业。
         case 'tmp_auth_code':
             msg = 'success';
             break;
         default:
-            
+            // 其他类型事件处理
     }
     //加密文本
     var text = Cipher.encrypt(msg);
