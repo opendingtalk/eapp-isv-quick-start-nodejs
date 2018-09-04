@@ -1,0 +1,120 @@
+var crypto = require('crypto');
+var httpReq = require('./libs/http');
+var DDCrypto = require('./libs/ddcrypto');
+
+var express = require('express');
+var path = require('path');
+var fs = require('fs');
+var logger = require('morgan');
+var cookieParser = require('cookie-parser');
+var bodyParser = require('body-parser');
+var app = express();
+
+var config = require('./config.default.js');
+var Cipher = new DDCrypto(config.token, config.encodingAESKey, config.suiteKey);
+
+app.use(logger('dev'));
+app.use(bodyParser.json());
+app.use(bodyParser.urlencoded({
+    extended: false
+}));
+app.use(cookieParser());
+
+HttpUtils = new httpReq(config.oapiHost);
+
+app.use('/login', function(req, res) {
+    var code = req.body.authCode;
+    var corpId = req.body.corpId;
+
+    // 时间戳
+    var timeStamp = new Date().getTime();
+    // 正式应用应该由钉钉通过开发者的回调地址动态获取到
+    var suiteTicket = getSuiteTicket(config.suiteKey);
+    // 构造/service/get_corp_token接口的消息体
+    var msg = timeStamp + "\n" + suiteTicket;
+    // 把timestamp+"\n"+suiteTicket当做签名字符串，suiteSecret做为签名秘钥，使用HmacSHA256算法计算签名，然后进行Base64 encode获取最后结果。然后把签名参数再进行urlconde，加到请求url后面
+    var sha = encodeURIComponent(crypto.createHmac('SHA256', config.suiteSecret).update(msg).digest('base64'));
+    // 调用接口获取access_token
+    HttpUtils.post("/service/get_corp_token", {
+        "accessKey": config.suiteKey,
+        "timestamp": timeStamp,
+        "suiteTicket": suiteTicket,
+        "signature": sha,
+    }, {
+        "auth_corpid": corpId,
+    }, function(err, body) {
+        var accessToken = body.access_token; 
+        HttpUtils.get("/user/getuserinfo", {
+            "access_token": accessToken,
+            "code": code,
+        }, function(err, body) {
+            res.send({
+                result: {
+                    userId: body.userid,
+                }
+            });
+        });
+    });
+
+});
+
+app.use('/receive', function(req, res) {
+    var body = req.body;
+    if (!body || !body.encrypt) {
+        return;
+    }
+    var encrypt = body.encrypt;
+    console.log(encrypt);
+
+    //解密推送信息
+    var data = Cipher.decrypt(encrypt);
+    console.log(data);
+    //解析数据结构
+    var json = JSON.parse(data.message) || {};
+    var msg = '';
+    //处理不同类型的推送数据
+    switch (json.EventType) {
+        case 'check_create_suite_url':
+            msg = 'success';
+            break;
+        case 'check_update_suite_url':
+            msg = 'success';
+            break;
+        case 'suite_ticket':
+            msg = 'success';
+            break;
+        case 'tmp_auth_code':
+            msg = 'success';
+            break;
+        default:
+            
+    }
+    //加密文本
+    var text = Cipher.encrypt(msg);
+    //生成随机串
+    var stmp = Date.now();
+    //生成随机数
+    var nonce = Math.random().toString(36).substring(2);
+
+    //签名文本
+    var sign = Cipher.getSignature(stmp, nonce, text);
+
+    //返回给推送服务器的信息
+    var result = {
+        msg_signature: sign,
+        timeStamp: stmp,
+        nonce: nonce,
+        encrypt: text
+    };
+    
+    res.send(result);
+});
+
+app.use(function(req, res, next) {
+  res.send('welcome')
+});
+
+function getSuiteTicket() {
+    return "temp_suite_ticket_only4_test";
+}
+module.exports = app;
